@@ -2,252 +2,298 @@ import './style.css'
 import { GridStack } from 'gridstack'
 import mqtt from 'mqtt'
 
-// --- Types & Defaults ---
-const DEFAULT_PAGES = [
-  {
-    id: 'p1',
-    name: 'Main Floor',
-    widgets: [
-      { id: 'w1', x: 0, y: 0, w: 4, h: 4, type: 'sensor', title: 'Power', icon: '⚡', subtitle: 'Main Load', value: '2.4', unit: 'kW' },
-      { id: 'w2', x: 4, y: 0, w: 4, h: 4, type: 'sensor', title: 'Climate', icon: '🌡️', subtitle: 'Living Room', value: '22.4', unit: '°C' },
-      { id: 'w3', x: 8, y: 0, w: 4, h: 4, type: 'switch', title: 'Lights', icon: '💡', subtitle: 'All Zones', status: 'OFF' }
-    ]
-  },
-  {
-    id: 'p2',
-    name: 'Studio',
-    widgets: [
-      { id: 'w4', x: 0, y: 0, w: 6, h: 4, type: 'chart', title: 'Network', icon: '🌐', subtitle: 'Latency' }
-    ]
-  }
-]
+// --- Constants & Templates ---
+const WIDGET_TYPES = {
+  sensor: { icon: '📊', name: 'Sensor Display' },
+  switch: { icon: '🔘', name: 'Smart Switch' },
+  chart: { icon: '📈', name: 'Trend Graph' },
+  light: { icon: '💡', name: 'Lighting Control' }
+}
 
-// --- State Management ---
-class DashboardState {
-  constructor() {
-    const saved = localStorage.getItem('mc_userdata')
-    this.data = saved ? JSON.parse(saved) : {
-      pages: DEFAULT_PAGES,
-      settings: {
-        mqtt_host: 'broker.hivemq.com',
-        mqtt_port: 8000,
-        mqtt_topic: 'mission-control/status'
-      }
+const DEFAULT_DATA = {
+  pages: [
+    {
+      id: 'p-default',
+      name: 'Main Console',
+      widgets: [
+        { id: 'w1', x: 0, y: 0, w: 4, h: 4, type: 'sensor', title: 'Power', icon: '⚡', subtitle: 'Main Load', value: '2.4', unit: 'kW' },
+        { id: 'w2', x: 4, y: 0, w: 4, h: 4, type: 'sensor', title: 'Climate', icon: '🌡️', subtitle: 'Living Room', value: '22.4', unit: '°C' },
+        { id: 'w3', x: 8, y: 0, w: 4, h: 4, type: 'switch', title: 'Lights', icon: '💡', subtitle: 'All Zones', status: 'OFF' }
+      ]
     }
-    this.currentPageId = this.data.pages[0].id
-    this.editMode = false
+  ],
+  settings: {
+    mqtt_host: 'broker.hivemq.com',
+    mqtt_port: 8000,
+    mqtt_topic: 'mission-control/status',
+    theme_accent: '#00f2ff'
+  }
+}
+
+// --- State Engine ---
+class DashboardEngine {
+  constructor() {
+    const saved = localStorage.getItem('mc_v2_data')
+    this.state = saved ? JSON.parse(saved) : DEFAULT_DATA
+    this.activePageId = this.state.pages[0].id
+    this.isEditMode = false
+    this.grid = null
+    this.mqttClient = null
+    
+    this.init()
+  }
+
+  init() {
+    this.renderBase()
+    this.initMqtt()
+    this.initGrid()
+    this.bindGlobalEvents()
   }
 
   save() {
-    localStorage.setItem('mc_userdata', JSON.stringify(this.data))
+    localStorage.setItem('mc_v2_data', JSON.stringify(this.state))
   }
 
-  updateWidget(pageId, widgetId, patch) {
-    const page = this.data.pages.find(p => p.id === pageId)
-    const widget = page.widgets.find(w => w.id === widgetId)
-    Object.assign(widget, patch)
-    this.save()
-  }
-
-  addPage(name) {
-    const newPage = { id: Date.now().toString(), name, widgets: [] }
-    this.data.pages.push(newPage)
-    this.save()
-    return newPage
-  }
-}
-
-const state = new DashboardState()
-let grid = null
-let mqttClient = null
-
-// --- MQTT Connection ---
-function initMqtt() {
-  if (mqttClient) mqttClient.end()
-  const { mqtt_host, mqtt_port } = state.data.settings
-  try {
-    mqttClient = mqtt.connect(`ws://${mqtt_host}:${mqtt_port}/mqtt`)
-    mqttClient.on('connect', () => ui.updateMqttStatus(true))
-    mqttClient.on('close', () => ui.updateMqttStatus(false))
-  } catch (e) {
-    console.error('MQTT Connection Error:', e)
-  }
-}
-
-// --- UI Engine ---
-const ui = {
-  render() {
+  // --- UI Components ---
+  renderBase() {
     document.querySelector('#app').innerHTML = `
       <div class="grid-glow"></div>
-      <div class="flex flex-col h-screen w-screen bg-bg-main overflow-hidden">
-        <!-- Header -->
-        <header class="h-16 flex items-center justify-between px-6 glass border-b z-50">
-          <div class="flex items-center gap-8">
-            <div class="text-lg font-black tracking-tighter uppercase tracking-widest text-white">
-              Mission<span class="text-accent ml-0.5">Control</span>
+      <div class="flex flex-col h-screen w-screen bg-bg-main text-white overflow-hidden font-sans">
+        <!-- Persistent Navigation Bar -->
+        <header class="h-20 flex items-center justify-between px-8 glass border-b z-[60]">
+          <div class="flex items-center gap-12">
+            <div class="group cursor-pointer">
+              <div class="text-xl font-black tracking-[0.1em] uppercase">MISSION<span class="text-accent ml-1 transition-all group-hover:drop-shadow-[0_0_10px_rgba(0,242,255,0.5)]">CONTROL</span></div>
+              <div class="text-[8px] text-white/20 tracking-[0.4em] -mt-1 font-bold">STATION_SUB_01</div>
             </div>
-            <nav id="page-tabs" class="hidden md:flex gap-4 h-full items-center">
+            
+            <nav id="page-tabs" class="hidden lg:flex gap-2 h-full items-center">
               ${this.renderTabs()}
+              <button id="add-page" class="p-2 text-white/20 hover:text-white transition-colors text-lg">+</button>
             </nav>
           </div>
+
           <div class="flex items-center gap-4">
-            <button id="toggle-edit" class="p-2 rounded-lg hover:bg-white/5 transition-colors text-white/40 hover:text-white">
-              ${state.editMode ? '✅ Done' : '🛠️ Edit'}
+            <button id="toggle-edit" class="px-4 py-2 rounded-full border border-white/5 bg-white/5 hover:bg-white/10 text-[10px] font-black uppercase tracking-widest transition-all">
+              ${this.isEditMode ? '✅ Done' : '🛠️ Edit Grid'}
             </button>
-            <button id="open-settings" class="p-2 rounded-lg hover:bg-white/5 transition-colors">⚙️</button>
+            <button id="open-settings" class="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 transition-all border border-white/5 text-lg">⚙️</button>
           </div>
         </header>
 
-        <!-- Main Content -->
-        <main class="flex-1 overflow-hidden relative">
-          <div class="grid-stack overflow-y-auto h-full p-4 custom-scrollbar"></div>
+        <!-- Dynamic Content Area -->
+        <main id="dashboard-container" class="flex-1 relative overflow-hidden ${this.isEditMode ? 'edit-mode' : ''}">
+          <div class="grid-stack custom-scrollbar overflow-y-auto h-full p-8"></div>
+          
+          <!-- Edit Toolbar (Visible only in edit mode) -->
+          <div id="edit-toolbar" class="fixed bottom-8 left-1/2 -translate-x-1/2 glass px-6 py-4 rounded-3xl border shadow-2xl flex gap-6 items-center z-[70] ${this.isEditMode ? 'translate-y-0 opacity-100' : 'translate-y-20 opacity-0'} transition-all duration-500">
+             <button id="add-widget" class="bg-accent text-black font-black text-[10px] px-6 py-2 rounded-full uppercase tracking-tighter hover:scale-105 transition-transform">Add Widget</button>
+             <div class="w-px h-6 bg-white/10"></div>
+             <div class="text-[9px] text-white/40 uppercase font-bold tracking-widest">Layout Management</div>
+          </div>
         </main>
       </div>
 
-      <!-- Settings Overlay -->
-      <div id="settings-overlay" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] hidden flex items-center justify-center">
-        <div class="bg-surface border border-white/10 w-full max-w-md p-8 rounded-3xl shadow-2xl">
-          <div class="flex justify-between items-center mb-8">
-            <h2 class="text-xl font-bold">Settings</h2>
-            <button id="close-settings" class="text-2xl opacity-40 hover:opacity-100">×</button>
-          </div>
-          <div class="space-y-6">
-            <div class="space-y-2 text-xs uppercase tracking-widest text-white/40 font-bold">MQTT Broker</div>
-            <input id="set-mqtt-host" class="w-full bg-white/5 border border-white/10 p-3 rounded-xl focus:border-accent outline-none" value="${state.data.settings.mqtt_host}">
-            <div class="flex justify-between items-center pt-4">
-              <div class="text-sm">Status</div>
-              <div id="mqtt-status-dot" class="flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-orange-500"></span>
-                <span class="text-xs text-white/60">Offline</span>
-              </div>
+      <!-- Settings Panel -->
+      <div id="settings-panel" class="fixed inset-y-0 right-0 w-full max-w-sm glass border-l z-[100] translate-x-full transition-transform duration-500 ease-in-out p-12">
+        <div class="flex justify-between items-center mb-12">
+          <h2 class="text-2xl font-black uppercase tracking-tighter">Settings</h2>
+          <button id="close-settings" class="text-3xl opacity-20 hover:opacity-100 transition-opacity">×</button>
+        </div>
+        
+        <div class="space-y-10">
+          <div class="space-y-4">
+            <label class="text-[10px] uppercase font-black text-white/40 tracking-widest">MQTT Backbone</label>
+            <input id="cfg-mqtt-host" class="w-full bg-white/5 border border-white/10 p-4 rounded-2xl outline-none focus:border-accent transition-colors" value="${this.state.settings.mqtt_host}">
+            <div class="flex justify-between items-center px-2">
+               <div class="text-xs font-bold text-white/60">Status</div>
+               <div id="mqtt-indicator" class="flex items-center gap-2">
+                  <div class="w-2 h-2 rounded-full bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.4)]"></div>
+                  <span class="text-[9px] font-black uppercase text-white/30">Offline</span>
+               </div>
             </div>
-            <button id="save-settings" class="w-full bg-accent text-black font-bold py-4 rounded-xl mt-8 hover:brightness-110 transition-all">Save Changes</button>
+          </div>
+
+          <div class="space-y-4 pt-10 border-t border-white/5 text-center">
+            <p class="text-[10px] text-white/20 italic font-medium leading-relaxed">Mission Control v2.0 - Developed for Subsubl. Local storage synchronization active.</p>
+            <button id="save-settings" class="w-full py-4 bg-white text-black font-black uppercase text-xs rounded-2xl hover:bg-accent transition-colors">Apply Changes</button>
           </div>
         </div>
       </div>
     `
-    this.initGrid()
-    this.bindEvents()
-    initMqtt()
-  },
+  }
 
   renderTabs() {
-    return state.data.pages.map(page => `
-      <button class="px-2 py-1 text-xs uppercase tracking-widest transition-all ${page.id === state.currentPageId ? 'tab-active' : 'text-white/40 hover:text-white'}" data-page="${page.id}">
-        ${page.name}
+    return this.state.pages.map(p => `
+      <button class="px-6 py-2 text-[10px] uppercase font-black tracking-[0.2em] transition-all border-b-2 ${p.id === this.activePageId ? 'tab-active' : 'text-white/20 border-transparent hover:text-white/60'}" data-pid="${p.id}">
+        ${p.name}
       </button>
     `).join('')
-  },
+  }
 
+  // --- Grid Management ---
   initGrid() {
-    grid = GridStack.init({
+    this.grid = GridStack.init({
       cellHeight: 20,
-      margin: 10,
+      margin: 12,
       float: true,
-      staticGrid: !state.editMode,
-      alwaysShowResizeHandle: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+      staticGrid: !this.isEditMode,
+      column: 12,
+      disableOneColumnMode: false,
     })
 
-    const currentPage = state.data.pages.find(p => p.id === state.currentPageId)
-    this.loadWidgets(currentPage.widgets)
+    const activePage = this.state.pages.find(p => p.id === this.activePageId)
+    this.loadWidgets(activePage.widgets)
 
-    grid.on('change', (event, items) => {
+    this.grid.on('change', (e, items) => {
       items.forEach(item => {
-        state.updateWidget(state.currentPageId, item.id, {
-          x: item.x,
-          y: item.y,
-          w: item.w,
-          h: item.h
-        })
+        const widget = activePage.widgets.find(w => w.id === item.id)
+        if (widget) {
+          widget.x = item.x; widget.y = item.y; widget.w = item.w; widget.h = item.h
+        }
       })
+      this.save()
     })
-  },
+  }
 
   loadWidgets(widgets) {
-    grid.removeAll()
-    widgets.forEach(w => {
-      const el = document.createElement('div')
-      el.setAttribute('gs-id', w.id)
-      el.innerHTML = `
-        <div class="grid-stack-item-content flex flex-col p-6 group relative">
-          ${state.editMode ? '<div class="absolute top-2 right-2 text-[10px] opacity-20">:: drag</div>' : ''}
-          <div class="w-10 h-10 bg-white/5 rounded-lg flex items-center justify-center mb-4 text-accent transition-transform duration-500 group-hover:scale-110">${w.icon || '📦'}</div>
-          <div class="text-[10px] text-white/30 uppercase tracking-[0.2em] font-bold truncate">${w.subtitle || ''}</div>
-          <div class="text-sm font-semibold mb-auto truncate">${w.title}</div>
-          ${w.value ? `
-            <div class="text-2xl md:text-3xl font-black tracking-tight text-white mt-4 tabular-nums">
-              ${w.value}<span class="text-[10px] ml-1 opacity-40">${w.unit || ''}</span>
-            </div>
-          ` : ''}
-          ${w.status ? `
-             <div class="mt-4 flex items-center gap-3">
-               <div class="w-12 h-6 bg-white/10 rounded-full relative p-1 cursor-pointer transition-colors ${w.status === 'ON' ? 'bg-accent/40' : ''}">
-                 <div class="absolute w-4 h-4 bg-white rounded-full transition-all ${w.status === 'ON' ? 'translate-x-6' : 'translate-x-0'}"></div>
-               </div>
-               <span class="text-[10px] font-bold ${w.status === 'ON' ? 'text-accent' : 'text-white/40'}">${w.status}</span>
-             </div>
-          ` : ''}
+    this.grid.removeAll()
+    widgets.forEach(w => this.addWidgetToGrid(w))
+  }
+
+  addWidgetToGrid(w) {
+    const el = document.createElement('div')
+    el.setAttribute('gs-id', w.id)
+    el.innerHTML = `
+      <div class="grid-stack-item-content group">
+        <div class="widget-control">
+          <button class="remove-w p-1 bg-red-500/20 text-red-500 hover:bg-red-500 hover:text-white rounded transition-colors" data-wid="${w.id}">×</button>
         </div>
-      `
-      grid.addWidget(el, { x: w.x, y: w.y, w: w.w, h: w.h, id: w.id })
-    })
-  },
-
-  updateMqttStatus(connected) {
-    const dot = document.querySelector('#mqtt-status-dot')
-    if (dot) {
-      dot.innerHTML = `
-        <span class="w-2 h-2 rounded-full ${connected ? 'bg-accent' : 'bg-orange-500'} ${connected ? 'animate-pulse' : ''}"></span>
-        <span class="text-xs text-white/60">${connected ? 'Active' : 'Offline'}</span>
-      `
+        <div class="h-full flex flex-col p-8">
+           <div class="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center text-accent text-xl mb-6 shadow-inner transition-all duration-500 group-hover:scale-110 group-hover:bg-accent/10 group-hover:text-white">
+             ${w.icon || '📦'}
+           </div>
+           <div class="space-y-1 mb-auto">
+             <div class="text-[9px] text-white/30 uppercase font-black tracking-widest">${w.subtitle || ''}</div>
+             <div class="text-sm font-bold text-white/90 group-hover:text-white transition-colors uppercase tracking-tight">${w.title}</div>
+           </div>
+           ${w.value ? `
+             <div class="text-4xl font-black tracking-tighter mt-6 tabular-nums text-white">
+               ${w.value}<span class="text-xs ml-1 opacity-20">${w.unit || ''}</span>
+             </div>
+           ` : ''}
+           <div class="mt-8 relative h-1 bg-white/5 rounded-full overflow-hidden">
+             <div class="absolute inset-y-0 left-0 bg-accent rounded-full status-pulse shadow-[0_0_15px_rgba(0,242,255,0.4)]" style="width: 40%"></div>
+           </div>
+        </div>
+      </div>
+    `
+    this.grid.addWidget(el, { x: w.x, y: w.y, w: w.w, h: w.h, id: w.id })
+    
+    el.querySelector('.remove-w').onclick = (e) => {
+      const wid = e.target.dataset.wid
+      const page = this.state.pages.find(p => p.id === this.activePageId)
+      page.widgets = page.widgets.filter(w => w.id !== wid)
+      this.grid.removeWidget(el)
+      this.save()
     }
-  },
+  }
 
-  bindEvents() {
-    document.querySelectorAll('[data-page]').forEach(btn => {
+  // --- Logic & Events ---
+  initMqtt() {
+    if (this.mqttClient) this.mqttClient.end()
+    try {
+      this.mqttClient = mqtt.connect(`ws://${this.state.settings.mqtt_host}:${this.state.settings.mqtt_port}/mqtt`)
+      this.mqttClient.on('connect', () => this.updateMqttUI(true))
+      this.mqttClient.on('close', () => this.updateMqttUI(false))
+    } catch (e) {
+      console.warn('MQTT System Error:', e)
+    }
+  }
+
+  updateMqttUI(connected) {
+    const el = document.querySelector('#mqtt-indicator')
+    if (!el) return
+    el.innerHTML = `
+      <div class="w-2 h-2 rounded-full ${connected ? 'bg-accent shadow-[0_0_8px_#00f2ff]' : 'bg-orange-500 shadow-[0_0_8px_#f97316]'} ${connected ? 'status-pulse' : ''}"></div>
+      <span class="text-[9px] font-black uppercase ${connected ? 'text-accent' : 'text-white/30'}">${connected ? 'Active' : 'Offline'}</span>
+    `
+  }
+
+  bindGlobalEvents() {
+    document.querySelectorAll('[data-pid]').forEach(btn => {
       btn.onclick = (e) => {
-        state.currentPageId = e.target.dataset.page
-        this.render()
+        this.activePageId = e.target.dataset.pid
+        this.renderBase()
+        this.initGrid()
+        this.bindGlobalEvents()
       }
     })
 
     document.getElementById('toggle-edit').onclick = () => {
-      state.editMode = !state.editMode
-      this.render()
+      this.isEditMode = !this.isEditMode
+      this.renderBase()
+      this.initGrid()
+      this.bindGlobalEvents()
     }
 
     document.getElementById('open-settings').onclick = () => {
-      document.getElementById('settings-overlay').classList.remove('hidden')
+      document.getElementById('settings-panel').classList.remove('translate-x-full')
     }
 
     document.getElementById('close-settings').onclick = () => {
-      document.getElementById('settings-overlay').classList.add('hidden')
+      document.getElementById('settings-panel').classList.add('translate-x-full')
     }
 
     document.getElementById('save-settings').onclick = () => {
-      state.data.settings.mqtt_host = document.getElementById('set-mqtt-host').value
-      state.save()
-      initMqtt()
-      document.getElementById('settings-overlay').classList.add('hidden')
+      this.state.settings.mqtt_host = document.getElementById('cfg-mqtt-host').value
+      this.save()
+      this.initMqtt()
+      document.getElementById('settings-panel').classList.add('translate-x-full')
     }
-    
-    // Swipe Logic Mockup (Mobile optimized)
-    let touchStartX = 0
-    document.querySelector('main').addEventListener('touchstart', (e) => touchStartX = e.touches[0].clientX)
+
+    document.getElementById('add-page').onclick = () => {
+      const name = prompt('Page Name:')
+      if (name) {
+        const p = { id: 'p-' + Date.now(), name, widgets: [] }
+        this.state.pages.push(p)
+        this.activePageId = p.id
+        this.save()
+        this.renderBase()
+        this.initGrid()
+        this.bindGlobalEvents()
+      }
+    }
+
+    document.getElementById('add-widget').onclick = () => {
+      const page = this.state.pages.find(p => p.id === this.activePageId)
+      const w = { id: 'w-' + Date.now(), x: 0, y: 0, w: 4, h: 4, type: 'sensor', title: 'New Widget', icon: '📦', subtitle: 'Parameter' }
+      page.widgets.push(w)
+      this.addWidgetToGrid(w)
+      this.save()
+    }
+
+    // Mobile Swipe Handler
+    let tStart = 0
+    document.querySelector('main').addEventListener('touchstart', (e) => tStart = e.touches[0].clientX)
     document.querySelector('main').addEventListener('touchend', (e) => {
-      const diff = touchStartX - e.changedTouches[0].clientX
+      if (this.isEditMode) return
+      const diff = tStart - e.changedTouches[0].clientX
       if (Math.abs(diff) > 100) {
-        const idx = state.data.pages.findIndex(p => p.id === state.currentPageId)
-        if (diff > 0 && idx < state.data.pages.length - 1) {
-          state.currentPageId = state.data.pages[idx + 1].id
-          this.render()
-        } else if (diff < 0 && idx > 0) {
-          state.currentPageId = state.data.pages[idx - 1].id
-          this.render()
-        }
+        const idx = this.state.pages.findIndex(p => p.id === this.activePageId)
+        if (diff > 0 && idx < this.state.pages.length - 1) this.switchPage(this.state.pages[idx+1].id)
+        if (diff < 0 && idx > 0) this.switchPage(this.state.pages[idx-1].id)
       }
     })
   }
+
+  switchPage(pid) {
+    this.activePageId = pid
+    this.renderBase()
+    this.initGrid()
+    this.bindGlobalEvents()
+  }
 }
 
-ui.render()
+// Initialise Application
+window.addEventListener('load', () => new DashboardEngine())
