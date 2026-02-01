@@ -4,13 +4,16 @@
 @theme {
   --color-accent: #00f2ff;
   --color-surface: #111111;
-  --color-surface-hover: #1a1a1a;
+  --color-surface-bright: #1a1a1a;
   --color-bg-main: #050505;
 }
 
 @layer base {
   body {
     @apply bg-bg-main text-white font-sans overflow-hidden h-screen w-screen selection:bg-accent/20;
+    background-image: 
+      radial-gradient(circle at 2px 2px, rgba(255,255,255,0.03) 1px, transparent 0);
+    background-size: 40px 40px;
   }
 }
 
@@ -20,9 +23,10 @@
   left: 0;
   width: 100%;
   height: 100%;
-  background-image: radial-gradient(circle at 50% 50%, rgba(0, 242, 255, 0.02) 0%, transparent 80%);
+  background-image: radial-gradient(circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(0, 242, 255, 0.05) 0%, transparent 60%);
   pointer-events: none;
   z-index: -1;
+  transition: background 0.1s ease-out;
 }
 
 /* GridStack Styling */
@@ -31,15 +35,15 @@
 }
 
 .grid-stack-item-content {
-  @apply !bg-surface !border !border-white/5 !rounded-3xl shadow-2xl transition-all duration-300;
+  @apply !bg-surface !border !border-white/5 !rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-300;
 }
 
 .edit-mode .grid-stack-item-content {
-  @apply !border-accent/40 !bg-accent/[0.03];
+  @apply !border-accent/40 !bg-accent/[0.02];
 }
 
 .grid-stack-placeholder > .placeholder-content {
-  @apply !bg-accent/5 !border-accent/20 !border-dashed !border-2 !rounded-3xl;
+  @apply !bg-accent/5 !border-accent/30 !border-dashed !border-2 !rounded-3xl;
 }
 
 /* Custom Scrollbar */
@@ -50,20 +54,20 @@
   @apply bg-transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  @apply bg-white/5 rounded-full hover:bg-white/10 transition-colors;
+  @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
 }
 
 /* UI Elements */
 .glass {
-  @apply bg-black/40 backdrop-blur-2xl border-white/5;
+  @apply bg-black/60 backdrop-blur-3xl border-white/5;
 }
 
 .tab-active {
-  @apply text-accent border-b-2 border-accent font-black;
+  @apply text-accent border-b-2 border-accent font-black drop-shadow-[0_0_8px_rgba(0,242,255,0.4)];
 }
 
 .widget-control {
-  @apply absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 z-20;
+  @apply absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2 z-20;
 }
 
 .edit-mode .widget-control {
@@ -71,10 +75,19 @@
 }
 
 @keyframes pulse-accent {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+  0%, 100% { opacity: 0.5; filter: blur(2px); }
+  50% { opacity: 1; filter: blur(0px); }
 }
 
 .status-pulse {
-  animation: pulse-accent 2s infinite;
+  animation: pulse-accent 3s infinite ease-in-out;
+}
+
+/* Button styles */
+.btn-primary {
+  @apply bg-accent text-black font-black uppercase text-[10px] tracking-widest px-6 py-3 rounded-2xl hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(0,242,255,0.2)];
+}
+
+.input-field {
+  @apply w-full bg-white/[0.03] border border-white/10 p-4 rounded-2xl outline-none focus:border-accent focus:bg-white/[0.05] transition-all text-sm;
 }
