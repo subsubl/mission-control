@@ -8,6 +8,7 @@ const DEFAULT_DATA = {
     {
       id: 'p-default',
       name: 'Main Console',
+      columns: 12,
       widgets: [
         { id: 'w1', x: 0, y: 0, w: 4, h: 5, type: 'sensor', title: 'Power', icon: 'zap', subtitle: 'Main Load', value: '2.4', unit: 'kW' },
         { id: 'w2', x: 4, y: 0, w: 4, h: 5, type: 'sensor', title: 'Climate', icon: 'thermometer', subtitle: 'Living Room', value: '22.4', unit: '°C' },
@@ -24,17 +25,19 @@ const DEFAULT_DATA = {
   }
 }
 
+const GRID_OPTIONS = [2, 4, 6, 8, 12]
+
 // --- Dashboard Logic ---
 class Dashboard {
   constructor() {
     const saved = localStorage.getItem('mc_v2_data')
     this.state = saved ? JSON.parse(saved) : DEFAULT_DATA
     this.activePageId = this.state.pages[0].id
+    this.editingPageId = this.activePageId
     this.isEditMode = false
     this.grid = null
     this.mqttClient = null
     this.haEntities = []
-    this.discoveredTopics = new Set()
     this.showEntityBrowser = false
     this.discoveryMode = false
     
@@ -47,7 +50,6 @@ class Dashboard {
     this.setupGrid()
     this.bindEvents()
     this.setupVisuals()
-    this.fetchHaEntities()
   }
 
   save() {
@@ -56,6 +58,9 @@ class Dashboard {
 
   // --- Rendering ---
   render() {
+    const currentPage = this.state.pages.find(p => p.id === this.activePageId)
+    const editingPage = this.state.pages.find(p => p.id === this.editingPageId)
+
     document.querySelector('#app').innerHTML = `
       <div class="grid-glow"></div>
       <div class="flex flex-col h-screen w-screen overflow-hidden">
@@ -64,7 +69,7 @@ class Dashboard {
           <div class="flex items-center gap-16">
             <div class="group cursor-default">
               <div class="text-xl font-black tracking-[0.2em] uppercase text-white">MISSION<span class="text-accent ml-1 transition-all group-hover:drop-shadow-[0_0_12px_rgba(0,242,255,0.6)]">CONTROL</span></div>
-              <div class="text-[7px] text-white/20 tracking-[0.6em] -mt-1 font-black">SYSTEM_STATION_CORE</div>
+              <div class="text-[7px] text-white/20 tracking-[0.6em] -mt-1 font-black uppercase">Core Station</div>
             </div>
             
             <nav id="page-tabs" class="hidden xl:flex gap-4 h-full items-center">
@@ -78,13 +83,6 @@ class Dashboard {
           </div>
 
           <div class="flex items-center gap-6">
-            <div class="flex flex-col items-end mr-4 hidden sm:flex">
-              <div class="text-[8px] font-black text-white/30 uppercase tracking-widest leading-none">Global Sync</div>
-              <div class="flex items-center gap-2 mt-1">
-                <span id="mqtt-dot" class="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
-                <span id="mqtt-label" class="text-[9px] font-bold text-white/40 uppercase">MQTT: Offline</span>
-              </div>
-            </div>
             <button id="toggle-edit" class="px-5 py-2 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-all text-white">
               ${this.isEditMode ? '✅ Save Layout' : '🛠️ Customize'}
             </button>
@@ -102,22 +100,22 @@ class Dashboard {
              <button id="browse-entities" class="px-5 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-all text-white">Browse HA</button>
              <div class="w-px h-8 bg-white/10"></div>
              <div class="flex flex-col">
-                <span class="text-[8px] text-white/20 uppercase font-black tracking-widest mb-0.5">Layout Active</span>
-                <span class="text-[10px] font-bold text-white/60">12-Column Technical Grid</span>
+                <span class="text-[8px] text-white/20 uppercase font-black tracking-widest mb-0.5">Active Layout</span>
+                <span class="text-[10px] font-bold text-white/60">${currentPage.columns || 12} Columns</span>
              </div>
           </div>
         </main>
       </div>
 
       <!-- Entity Browser Overlay -->
-      <div id="entity-browser" class="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] ${this.showEntityBrowser ? 'flex' : 'hidden'} items-center justify-center p-8">
+      <div id="entity-browser" class="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] ${this.showEntityBrowser ? 'flex' : 'hidden'} items-center justify-center p-8 text-white">
         <div class="bg-surface border border-white/10 w-full max-w-4xl h-[80vh] rounded-[3rem] shadow-2xl flex flex-col overflow-hidden">
-          <div class="p-10 border-b border-white/5 flex justify-between items-center text-white">
+          <div class="p-10 border-b border-white/5 flex justify-between items-center">
             <div>
               <h2 class="text-2xl font-black uppercase tracking-tighter">Entity Explorer</h2>
               <p class="text-[9px] text-white/30 uppercase tracking-[0.3em] mt-1">Discovered Home Assistant Nodes</p>
             </div>
-            <button id="close-browser" class="text-4xl font-thin opacity-20 hover:opacity-100 transition-opacity">×</button>
+            <button id="close-browser" class="text-4xl font-thin opacity-20 hover:opacity-100">×</button>
           </div>
           <div class="flex-1 overflow-y-auto p-10 custom-scrollbar">
             <div id="entity-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -128,21 +126,44 @@ class Dashboard {
       </div>
 
       <!-- Settings Side Panel -->
-      <div id="settings-panel" class="fixed inset-y-0 right-0 w-full max-w-md glass border-l z-[100] translate-x-full transition-all duration-700 ease-in-out p-16 shadow-[-50px_0_100px_rgba(0,0,0,0.5)]">
-        <div class="flex justify-between items-start mb-16 text-white">
+      <div id="settings-panel" class="fixed inset-y-0 right-0 w-full max-w-md glass border-l z-[100] translate-x-full transition-all duration-700 ease-in-out p-16 shadow-[-50px_0_100px_rgba(0,0,0,0.5)] overflow-y-auto custom-scrollbar text-white">
+        <div class="flex justify-between items-start mb-16">
           <div>
             <h2 class="text-3xl font-black uppercase tracking-tighter">Settings</h2>
-            <div class="text-[9px] font-bold text-accent uppercase tracking-[0.3em] mt-1">Connectivity backbone</div>
+            <div class="text-[9px] font-bold text-accent uppercase tracking-[0.3em] mt-1">Connectivity & Layout</div>
           </div>
           <button id="close-settings" class="text-4xl font-thin opacity-20 hover:opacity-100 transition-opacity leading-none">×</button>
         </div>
         
         <div class="space-y-12">
+          <!-- Page & Layout Section -->
+          <div class="space-y-6">
+            <label class="text-[10px] uppercase font-black text-white/30 tracking-widest">Layout Config</label>
+            <div class="space-y-4 bg-white/5 p-6 rounded-3xl border border-white/5">
+              <div class="text-[10px] text-white/40 uppercase font-bold">Target Page</div>
+              <select id="set-layout-page" class="w-full bg-black/40 border border-white/10 p-4 rounded-2xl outline-none focus:border-accent text-sm appearance-none">
+                ${this.state.pages.map(p => `<option value="${p.id}" ${p.id === this.editingPageId ? 'selected' : ''}>${p.name}</option>`).join('')}
+              </select>
+
+              <div class="text-[10px] text-white/40 uppercase font-bold pt-4">Column Density</div>
+              <div class="grid grid-cols-5 gap-2">
+                ${GRID_OPTIONS.map(cols => `
+                  <button class="grid-select-btn flex flex-col items-center gap-2 p-3 rounded-xl border ${editingPage.columns === cols ? 'border-accent bg-accent/10' : 'border-white/5 hover:bg-white/5'}" data-cols="${cols}">
+                    <div class="w-full aspect-square grid ${this.getPreviewGridClass(cols)} gap-0.5 opacity-40">
+                      ${Array(cols).fill().map(() => `<div class="bg-white/40 rounded-[1px]"></div>`).join('')}
+                    </div>
+                    <span class="text-[9px] font-black">${cols}</span>
+                  </button>
+                `).join('')}
+              </div>
+            </div>
+          </div>
+
           <!-- MQTT Config -->
           <div class="space-y-5">
             <label class="flex items-center justify-between text-[10px] uppercase font-black text-white/30 tracking-widest">
               <span class="flex items-center gap-3"><i data-lucide="radio" class="w-3 h-3 text-accent"></i> MQTT Broker</span>
-              <button id="toggle-discovery" class="text-accent hover:underline">Start Discovery</button>
+              <button id="toggle-discovery" class="text-accent hover:underline">${this.discoveryMode ? 'Stop Discovery' : 'Start Discovery'}</button>
             </label>
             <input id="cfg-mqtt-host" class="input-field" placeholder="Broker URL" value="${this.state.settings.mqtt_host}">
             <input id="cfg-mqtt-port" class="input-field" placeholder="Port" value="${this.state.settings.mqtt_port}">
@@ -158,8 +179,7 @@ class Dashboard {
           </div>
 
           <div class="pt-10 border-t border-white/5 space-y-4">
-            <button id="save-settings" class="w-full py-5 bg-white text-black font-black uppercase text-xs rounded-2xl hover:bg-accent transition-all shadow-[0_20px_40px_rgba(0,0,0,0.3)]">Establish Connections</button>
-            <p class="text-[9px] text-white/20 text-center uppercase tracking-widest font-bold">Encrypted Local Storage Sync Active</p>
+            <button id="save-settings" class="w-full py-5 bg-white text-black font-black uppercase text-xs rounded-2xl hover:bg-accent transition-all shadow-[0_20px_40px_rgba(0,0,0,0.3)]">Apply Global Config</button>
           </div>
         </div>
       </div>
@@ -167,8 +187,16 @@ class Dashboard {
     lucide.createIcons()
   }
 
+  getPreviewGridClass(cols) {
+    if (cols === 2) return 'grid-cols-2';
+    if (cols === 4) return 'grid-cols-4';
+    if (cols === 6) return 'grid-cols-6';
+    if (cols === 8) return 'grid-cols-8';
+    return 'grid-cols-4'; // 12 fits better in 4 for preview
+  }
+
   renderEntityList() {
-    if (this.haEntities.length === 0) return `<div class="text-white/20 text-[10px] uppercase font-bold p-8 border border-white/5 rounded-2xl text-center">No entities discovered. Check HA settings.</div>`
+    if (this.haEntities.length === 0) return `<div class="text-white/20 text-[10px] uppercase font-bold p-8 border border-white/5 rounded-2xl text-center col-span-full">No entities discovered. Check HA settings.</div>`
     
     return this.haEntities.map(e => `
       <div class="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-between hover:bg-white/10 transition-colors group cursor-pointer add-ha-widget" data-eid="${e.entity_id}">
@@ -200,26 +228,33 @@ class Dashboard {
 
   // --- Grid Engine ---
   setupGrid() {
+    const currentPage = this.state.pages.find(p => p.id === this.activePageId)
+    const cols = currentPage.columns || 12
+
     this.grid = GridStack.init({
       cellHeight: 20,
       margin: 15,
       float: true,
       staticGrid: !this.isEditMode,
-      column: 12,
+      column: cols,
       animate: true,
       disableOneColumnMode: false,
     })
 
-    const page = this.state.pages.find(p => p.id === this.activePageId)
-    page.widgets.forEach(w => this.addWidgetToUI(w))
+    this.loadWidgets(currentPage.widgets)
 
     this.grid.on('change', (e, items) => {
       items.forEach(item => {
-        const w = page.widgets.find(widget => widget.id === item.id)
+        const w = currentPage.widgets.find(widget => widget.id === item.id)
         if (w) { w.x = item.x; w.y = item.y; w.w = item.w; w.h = item.h }
       })
       this.save()
     })
+  }
+
+  loadWidgets(widgets) {
+    this.grid.removeAll()
+    widgets.forEach(w => this.addWidgetToUI(w))
   }
 
   addWidgetToUI(w) {
@@ -235,7 +270,7 @@ class Dashboard {
              <i data-lucide="${w.icon || 'box'}" class="w-5 h-5"></i>
            </div>
            <div class="space-y-1 mb-auto">
-             <div class="text-[9px] text-white/30 uppercase font-black tracking-[0.2em]">${w.subtitle || ''}</div>
+             <div class="text-[9px] text-white/20 uppercase font-black tracking-[0.2em]">${w.subtitle || ''}</div>
              <div class="text-sm font-black text-white/80 group-hover:text-white transition-colors uppercase tracking-tighter">${w.title}</div>
            </div>
            ${w.value ? `
@@ -288,6 +323,23 @@ class Dashboard {
       document.getElementById('settings-panel').classList.add('translate-x-full')
     }
 
+    document.getElementById('set-layout-page').onchange = (e) => {
+      this.editingPageId = e.target.value
+      this.render(); this.setupGrid(); this.bindEvents();
+      document.getElementById('settings-panel').classList.remove('translate-x-full')
+    }
+
+    document.querySelectorAll('.grid-select-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        const cols = parseInt(btn.dataset.cols)
+        const page = this.state.pages.find(p => p.id === this.editingPageId)
+        page.columns = cols
+        this.save()
+        this.render(); this.setupGrid(); this.bindEvents();
+        document.getElementById('settings-panel').classList.remove('translate-x-full')
+      }
+    })
+
     document.getElementById('save-settings').onclick = () => {
       this.state.settings.mqtt_host = document.getElementById('cfg-mqtt-host').value
       this.state.settings.mqtt_port = document.getElementById('cfg-mqtt-port').value
@@ -297,13 +349,6 @@ class Dashboard {
       this.initMqtt()
       this.fetchHaEntities()
       document.getElementById('settings-panel').classList.add('translate-x-full')
-    }
-
-    document.getElementById('toggle-discovery').onclick = (e) => {
-      this.discoveryMode = !this.discoveryMode
-      e.target.textContent = this.discoveryMode ? 'Stop Discovery' : 'Start Discovery'
-      e.target.classList.toggle('text-red-500', this.discoveryMode)
-      this.initMqtt()
     }
 
     document.getElementById('browse-entities').onclick = () => {
@@ -343,7 +388,7 @@ class Dashboard {
       const name = prompt('NEW STATION NAME:')
       if (name) {
         const id = 'p-' + Date.now()
-        this.state.pages.push({ id, name, widgets: [] })
+        this.state.pages.push({ id, name, widgets: [], columns: 12 })
         this.switchPage(id)
       }
     }
@@ -359,31 +404,18 @@ class Dashboard {
 
   switchPage(pid) {
     this.activePageId = pid
+    this.editingPageId = pid
     this.render(); this.setupGrid(); this.bindEvents()
   }
 
   // --- External Integrations ---
   initMqtt() {
     if (this.mqttClient) this.mqttClient.end()
-    const { mqtt_host, mqtt_port, mqtt_topic } = this.state.settings
+    const { mqtt_host, mqtt_port } = this.state.settings
     try {
       this.mqttClient = mqtt.connect(`ws://${mqtt_host}:${mqtt_port}/mqtt`)
-      this.mqttClient.on('connect', () => {
-        this.updateMqttUI(true)
-        if (this.discoveryMode) {
-          this.mqttClient.subscribe('#')
-        } else {
-          this.mqttClient.subscribe(mqtt_topic)
-        }
-      })
+      this.mqttClient.on('connect', () => this.updateMqttUI(true))
       this.mqttClient.on('close', () => this.updateMqttUI(false))
-      this.mqttClient.on('message', (topic, payload) => {
-        if (this.discoveryMode) {
-          this.discoveredTopics.add(topic)
-          console.log('Discovered:', topic)
-        }
-        // Handle normal updates...
-      })
     } catch (e) { console.warn('MQTT System Offline') }
   }
 
@@ -405,7 +437,6 @@ class Dashboard {
         headers: { 'Authorization': `Bearer ${ha_token}`, 'Content-Type': 'application/json' }
       })
       this.haEntities = await res.json()
-      console.log('HA Entities Loaded:', this.haEntities.length)
       if (this.showEntityBrowser) this.render() 
     } catch (e) { console.error('HA Integration Failed') }
   }
