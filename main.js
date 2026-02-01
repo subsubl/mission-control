@@ -34,7 +34,9 @@ class Dashboard {
     this.grid = null
     this.mqttClient = null
     this.haEntities = []
+    this.discoveredTopics = new Set()
     this.showEntityBrowser = false
+    this.discoveryMode = false
     
     this.init()
   }
@@ -138,8 +140,9 @@ class Dashboard {
         <div class="space-y-12">
           <!-- MQTT Config -->
           <div class="space-y-5">
-            <label class="flex items-center gap-3 text-[10px] uppercase font-black text-white/30 tracking-widest">
-              <i data-lucide="radio" class="w-3 h-3 text-accent"></i> MQTT Broker
+            <label class="flex items-center justify-between text-[10px] uppercase font-black text-white/30 tracking-widest">
+              <span class="flex items-center gap-3"><i data-lucide="radio" class="w-3 h-3 text-accent"></i> MQTT Broker</span>
+              <button id="toggle-discovery" class="text-accent hover:underline">Start Discovery</button>
             </label>
             <input id="cfg-mqtt-host" class="input-field" placeholder="Broker URL" value="${this.state.settings.mqtt_host}">
             <input id="cfg-mqtt-port" class="input-field" placeholder="Port" value="${this.state.settings.mqtt_port}">
@@ -296,6 +299,13 @@ class Dashboard {
       document.getElementById('settings-panel').classList.add('translate-x-full')
     }
 
+    document.getElementById('toggle-discovery').onclick = (e) => {
+      this.discoveryMode = !this.discoveryMode
+      e.target.textContent = this.discoveryMode ? 'Stop Discovery' : 'Start Discovery'
+      e.target.classList.toggle('text-red-500', this.discoveryMode)
+      this.initMqtt()
+    }
+
     document.getElementById('browse-entities').onclick = () => {
       this.showEntityBrowser = true
       this.render(); this.setupGrid(); this.bindEvents()
@@ -355,11 +365,25 @@ class Dashboard {
   // --- External Integrations ---
   initMqtt() {
     if (this.mqttClient) this.mqttClient.end()
-    const { mqtt_host, mqtt_port } = this.state.settings
+    const { mqtt_host, mqtt_port, mqtt_topic } = this.state.settings
     try {
       this.mqttClient = mqtt.connect(`ws://${mqtt_host}:${mqtt_port}/mqtt`)
-      this.mqttClient.on('connect', () => this.updateMqttUI(true))
+      this.mqttClient.on('connect', () => {
+        this.updateMqttUI(true)
+        if (this.discoveryMode) {
+          this.mqttClient.subscribe('#')
+        } else {
+          this.mqttClient.subscribe(mqtt_topic)
+        }
+      })
       this.mqttClient.on('close', () => this.updateMqttUI(false))
+      this.mqttClient.on('message', (topic, payload) => {
+        if (this.discoveryMode) {
+          this.discoveredTopics.add(topic)
+          console.log('Discovered:', topic)
+        }
+        // Handle normal updates...
+      })
     } catch (e) { console.warn('MQTT System Offline') }
   }
 
