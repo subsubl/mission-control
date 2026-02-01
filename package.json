@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
+    "gridstack": "^12.4.2",
     "mqtt": "^5.14.1"
   }
 }
