@@ -34,6 +34,7 @@ class Dashboard {
     this.grid = null
     this.mqttClient = null
     this.haEntities = []
+    this.showEntityBrowser = false
     
     this.init()
   }
@@ -44,6 +45,7 @@ class Dashboard {
     this.setupGrid()
     this.bindEvents()
     this.setupVisuals()
+    this.fetchHaEntities()
   }
 
   save() {
@@ -59,13 +61,13 @@ class Dashboard {
         <header class="h-20 flex items-center justify-between px-10 glass border-b z-[60]">
           <div class="flex items-center gap-16">
             <div class="group cursor-default">
-              <div class="text-xl font-black tracking-[0.2em] uppercase">MISSION<span class="text-accent ml-1 transition-all group-hover:drop-shadow-[0_0_12px_rgba(0,242,255,0.6)]">CONTROL</span></div>
+              <div class="text-xl font-black tracking-[0.2em] uppercase text-white">MISSION<span class="text-accent ml-1 transition-all group-hover:drop-shadow-[0_0_12px_rgba(0,242,255,0.6)]">CONTROL</span></div>
               <div class="text-[7px] text-white/20 tracking-[0.6em] -mt-1 font-black">SYSTEM_STATION_CORE</div>
             </div>
             
             <nav id="page-tabs" class="hidden xl:flex gap-4 h-full items-center">
               ${this.state.pages.map(p => `
-                <button class="px-4 py-2 text-[10px] uppercase font-black tracking-[0.2em] transition-all border-b-2 ${p.id === this.activePageId ? 'tab-active' : 'text-white/20 border-transparent hover:text-white/60'}" data-pid="${p.id}">
+                <button class="px-4 py-2 text-[10px] uppercase font-black tracking-[0.2em] transition-all border-b-2 ${p.id === this.activePageId ? 'tab-active text-accent' : 'text-white/20 border-transparent hover:text-white/60'}" data-pid="${p.id}">
                   ${p.name}
                 </button>
               `).join('')}
@@ -81,10 +83,10 @@ class Dashboard {
                 <span id="mqtt-label" class="text-[9px] font-bold text-white/40 uppercase">MQTT: Offline</span>
               </div>
             </div>
-            <button id="toggle-edit" class="px-5 py-2 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-all">
+            <button id="toggle-edit" class="px-5 py-2 rounded-xl border border-white/5 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-all text-white">
               ${this.isEditMode ? '✅ Save Layout' : '🛠️ Customize'}
             </button>
-            <button id="open-settings" class="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5"><i data-lucide="settings" class="w-4 h-4"></i></button>
+            <button id="open-settings" class="w-10 h-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 transition-all border border-white/5 text-white"><i data-lucide="settings" class="w-4 h-4"></i></button>
           </div>
         </header>
 
@@ -93,8 +95,9 @@ class Dashboard {
           <div class="grid-stack custom-scrollbar overflow-y-auto h-full p-10"></div>
           
           <!-- Command Bar (Edit Mode) -->
-          <div id="command-bar" class="fixed bottom-10 left-1/2 -translate-x-1/2 glass px-8 py-5 rounded-[2.5rem] border shadow-[0_25px_60px_-15px_rgba(0,0,0,0.5)] flex gap-8 items-center z-[70] ${this.isEditMode ? 'translate-y-0 opacity-100' : 'translate-y-32 opacity-0'} transition-all duration-700 cubic-bezier(0.16, 1, 0.3, 1)">
+          <div id="command-bar" class="fixed bottom-10 left-1/2 -translate-x-1/2 glass px-8 py-5 rounded-[2.5rem] border shadow-[0_25px_60px_-15px_rgba(0,0,0,0.5)] flex gap-8 items-center z-[70] ${this.isEditMode ? 'translate-y-0 opacity-100' : 'translate-y-32 opacity-0'} transition-all duration-700">
              <button id="add-widget" class="btn-primary">Add Widget</button>
+             <button id="browse-entities" class="px-5 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest transition-all text-white">Browse HA</button>
              <div class="w-px h-8 bg-white/10"></div>
              <div class="flex flex-col">
                 <span class="text-[8px] text-white/20 uppercase font-black tracking-widest mb-0.5">Layout Active</span>
@@ -104,9 +107,27 @@ class Dashboard {
         </main>
       </div>
 
+      <!-- Entity Browser Overlay -->
+      <div id="entity-browser" class="fixed inset-0 bg-black/80 backdrop-blur-md z-[110] ${this.showEntityBrowser ? 'flex' : 'hidden'} items-center justify-center p-8">
+        <div class="bg-surface border border-white/10 w-full max-w-4xl h-[80vh] rounded-[3rem] shadow-2xl flex flex-col overflow-hidden">
+          <div class="p-10 border-b border-white/5 flex justify-between items-center text-white">
+            <div>
+              <h2 class="text-2xl font-black uppercase tracking-tighter">Entity Explorer</h2>
+              <p class="text-[9px] text-white/30 uppercase tracking-[0.3em] mt-1">Discovered Home Assistant Nodes</p>
+            </div>
+            <button id="close-browser" class="text-4xl font-thin opacity-20 hover:opacity-100 transition-opacity">×</button>
+          </div>
+          <div class="flex-1 overflow-y-auto p-10 custom-scrollbar">
+            <div id="entity-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              ${this.renderEntityList()}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Settings Side Panel -->
       <div id="settings-panel" class="fixed inset-y-0 right-0 w-full max-w-md glass border-l z-[100] translate-x-full transition-all duration-700 ease-in-out p-16 shadow-[-50px_0_100px_rgba(0,0,0,0.5)]">
-        <div class="flex justify-between items-start mb-16">
+        <div class="flex justify-between items-start mb-16 text-white">
           <div>
             <h2 class="text-3xl font-black uppercase tracking-tighter">Settings</h2>
             <div class="text-[9px] font-bold text-accent uppercase tracking-[0.3em] mt-1">Connectivity backbone</div>
@@ -141,6 +162,37 @@ class Dashboard {
       </div>
     `
     lucide.createIcons()
+  }
+
+  renderEntityList() {
+    if (this.haEntities.length === 0) return `<div class="text-white/20 text-[10px] uppercase font-bold p-8 border border-white/5 rounded-2xl text-center">No entities discovered. Check HA settings.</div>`
+    
+    return this.haEntities.map(e => `
+      <div class="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center justify-between hover:bg-white/10 transition-colors group cursor-pointer add-ha-widget" data-eid="${e.entity_id}">
+        <div class="flex items-center gap-5">
+          <div class="w-10 h-10 bg-black/20 rounded-xl flex items-center justify-center text-accent">
+            <i data-lucide="${this.getIconForDomain(e.entity_id)}" class="w-4 h-4"></i>
+          </div>
+          <div class="flex flex-col">
+            <span class="text-white/80 font-bold text-sm">${e.attributes.friendly_name || e.entity_id}</span>
+            <span class="text-[8px] text-white/20 font-black tracking-widest uppercase">${e.entity_id}</span>
+          </div>
+        </div>
+        <div class="text-accent opacity-0 group-hover:opacity-100 transition-opacity text-xs font-black">+ ADD</div>
+      </div>
+    `).join('')
+  }
+
+  getIconForDomain(eid) {
+    const domain = eid.split('.')[0]
+    switch(domain) {
+      case 'light': return 'lightbulb';
+      case 'switch': return 'toggle-right';
+      case 'sensor': return 'activity';
+      case 'climate': return 'thermometer';
+      case 'binary_sensor': return 'shield';
+      default: return 'box';
+    }
   }
 
   // --- Grid Engine ---
@@ -180,7 +232,7 @@ class Dashboard {
              <i data-lucide="${w.icon || 'box'}" class="w-5 h-5"></i>
            </div>
            <div class="space-y-1 mb-auto">
-             <div class="text-[9px] text-white/20 uppercase font-black tracking-[0.2em]">${w.subtitle || ''}</div>
+             <div class="text-[9px] text-white/30 uppercase font-black tracking-[0.2em]">${w.subtitle || ''}</div>
              <div class="text-sm font-black text-white/80 group-hover:text-white transition-colors uppercase tracking-tighter">${w.title}</div>
            </div>
            ${w.value ? `
@@ -217,25 +269,15 @@ class Dashboard {
   }
 
   bindEvents() {
-    // Page Tabs
     document.querySelectorAll('[data-pid]').forEach(btn => {
-      btn.onclick = (e) => {
-        this.activePageId = e.target.dataset.pid
-        this.render()
-        this.setupGrid()
-        this.bindEvents()
-      }
+      btn.onclick = (e) => this.switchPage(e.target.dataset.pid)
     })
 
-    // Edit Mode
     document.getElementById('toggle-edit').onclick = () => {
       this.isEditMode = !this.isEditMode
-      this.render()
-      this.setupGrid()
-      this.bindEvents()
+      this.render(); this.setupGrid(); this.bindEvents()
     }
 
-    // Settings
     document.getElementById('open-settings').onclick = () => {
       document.getElementById('settings-panel').classList.remove('translate-x-full')
     }
@@ -250,18 +292,49 @@ class Dashboard {
       this.state.settings.ha_token = document.getElementById('cfg-ha-token').value
       this.save()
       this.initMqtt()
-      document.getElementById('settings-panel').classList.add('translate-x-full')
       this.fetchHaEntities()
+      document.getElementById('settings-panel').classList.add('translate-x-full')
     }
 
-    // Add Elements
+    document.getElementById('browse-entities').onclick = () => {
+      this.showEntityBrowser = true
+      this.render(); this.setupGrid(); this.bindEvents()
+    }
+
+    document.getElementById('close-browser').onclick = () => {
+      this.showEntityBrowser = false
+      this.render(); this.setupGrid(); this.bindEvents()
+    }
+
+    document.querySelectorAll('.add-ha-widget').forEach(btn => {
+      btn.onclick = () => {
+        const eid = btn.dataset.eid
+        const entity = this.haEntities.find(e => e.entity_id === eid)
+        const page = this.state.pages.find(p => p.id === this.activePageId)
+        const w = {
+          id: 'ha-' + Date.now(),
+          x: 0, y: 0, w: 4, h: 5,
+          type: eid.split('.')[0],
+          title: entity.attributes.friendly_name || eid,
+          icon: this.getIconForDomain(eid),
+          subtitle: 'HA_NODE',
+          value: entity.state,
+          unit: entity.attributes.unit_of_measurement || ''
+        }
+        page.widgets.push(w)
+        this.addWidgetToUI(w)
+        this.save()
+        this.showEntityBrowser = false
+        this.render(); this.setupGrid(); this.bindEvents()
+      }
+    })
+
     document.getElementById('add-page').onclick = () => {
       const name = prompt('NEW STATION NAME:')
       if (name) {
         const id = 'p-' + Date.now()
         this.state.pages.push({ id, name, widgets: [] })
-        this.activePageId = id
-        this.save(); this.render(); this.setupGrid(); this.bindEvents()
+        this.switchPage(id)
       }
     }
 
@@ -272,19 +345,6 @@ class Dashboard {
       this.addWidgetToUI(w)
       this.save()
     }
-
-    // Mobile Swipe (Mockup)
-    let tStart = 0
-    document.querySelector('main').addEventListener('touchstart', e => tStart = e.touches[0].clientX)
-    document.querySelector('main').addEventListener('touchend', e => {
-      if (this.isEditMode) return
-      const diff = tStart - e.changedTouches[0].clientX
-      if (Math.abs(diff) > 100) {
-        const idx = this.state.pages.findIndex(p => p.id === this.activePageId)
-        if (diff > 0 && idx < this.state.pages.length - 1) this.switchPage(this.state.pages[idx+1].id)
-        if (diff < 0 && idx > 0) this.switchPage(this.state.pages[idx-1].id)
-      }
-    })
   }
 
   switchPage(pid) {
@@ -322,6 +382,7 @@ class Dashboard {
       })
       this.haEntities = await res.json()
       console.log('HA Entities Loaded:', this.haEntities.length)
+      if (this.showEntityBrowser) this.render() 
     } catch (e) { console.error('HA Integration Failed') }
   }
 }
