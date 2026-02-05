@@ -310,6 +310,21 @@ class Dashboard {
   }
 
   bindEvents() {
+    // --- Spixi Integration ---
+    if (window.spixi) {
+      window.spixi.onMessage = (data) => {
+        console.log('[SPIXI] Raw Data:', data)
+        try {
+          const payload = JSON.parse(data)
+          if (payload.type === 'UPDATE') {
+            this.handleMqttMessage(payload.topic, JSON.stringify(payload.data))
+          }
+        } catch (e) {
+          console.warn('[SPIXI] Non-JSON message received:', data)
+        }
+      }
+    }
+
     document.querySelectorAll('[data-pid]').forEach(btn => {
       btn.onclick = (e) => this.switchPage(e.target.dataset.pid)
     })
@@ -368,6 +383,12 @@ class Dashboard {
       btn.onclick = () => {
         const eid = btn.dataset.eid
         const entity = this.haEntities.find(e => e.entity_id === eid)
+        
+        // --- Spixi Communication ---
+        if (window.spixi) {
+          window.spixi.sendMessage(`TRACK_ENTITY:${eid}`)
+        }
+
         const page = this.state.pages.find(p => p.id === this.activePageId)
         const w = {
           id: 'ha-' + Date.now(),
