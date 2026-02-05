@@ -17,10 +17,10 @@ const DEFAULT_DATA = {
     }
   ],
   settings: {
-    mqtt_host: 'broker.hivemq.com',
-    mqtt_port: 8000,
-    mqtt_topic: 'mission-control/status',
-    ha_url: '',
+    mqtt_host: window.location.hostname || 'localhost',
+    mqtt_port: 1883,
+    mqtt_topic: 'ha/state/#',
+    ha_url: 'http://homeassistant.local:8123',
     ha_token: ''
   }
 }
@@ -261,7 +261,7 @@ class Dashboard {
     const el = document.createElement('div')
     el.setAttribute('gs-id', w.id)
     el.innerHTML = `
-      <div class="grid-stack-item-content group">
+      <div class="grid-stack-item-content group ${w.ha_entity && w.value === 'on' ? 'status-on' : ''}">
         <div class="widget-control">
           <button class="remove-w w-6 h-6 flex items-center justify-center bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white rounded-full transition-all" data-wid="${w.id}">×</button>
         </div>
@@ -273,10 +273,13 @@ class Dashboard {
              <div class="text-[9px] text-white/20 uppercase font-black tracking-[0.2em]">${w.subtitle || ''}</div>
              <div class="text-sm font-black text-white/80 group-hover:text-white transition-colors uppercase tracking-tighter">${w.title}</div>
            </div>
-           ${w.value ? `
+           ${w.value !== undefined ? `
              <div class="text-4xl font-black tracking-tighter mt-10 tabular-nums text-white flex items-baseline">
-               ${w.value}<span class="text-xs ml-2 opacity-10 font-bold uppercase">${w.unit || ''}</span>
+               <span class="value-text">${w.value}</span><span class="text-xs ml-2 opacity-10 font-bold uppercase">${w.unit || ''}</span>
              </div>
+           ` : ''}
+           ${w.type === 'switch' || w.type === 'light' ? `
+             <div class="text-xs font-black mt-10 uppercase tracking-widest text-accent status-text">${w.status || (w.value || 'OFF').toUpperCase()}</div>
            ` : ''}
            <div class="mt-10 relative h-1 bg-white/5 rounded-full overflow-hidden">
              <div class="absolute inset-y-0 left-0 bg-accent rounded-full status-pulse shadow-[0_0_15px_#00f2ff]" style="width: 40%"></div>
@@ -368,6 +371,7 @@ class Dashboard {
         const page = this.state.pages.find(p => p.id === this.activePageId)
         const w = {
           id: 'ha-' + Date.now(),
+          ha_entity: eid,
           x: 0, y: 0, w: 4, h: 5,
           type: eid.split('.')[0],
           title: entity.attributes.friendly_name || eid,
@@ -411,12 +415,47 @@ class Dashboard {
   // --- External Integrations ---
   initMqtt() {
     if (this.mqttClient) this.mqttClient.end()
-    const { mqtt_host, mqtt_port } = this.state.settings
+    const { mqtt_host, mqtt_port, mqtt_topic } = this.state.settings
     try {
       this.mqttClient = mqtt.connect(`ws://${mqtt_host}:${mqtt_port}/mqtt`)
-      this.mqttClient.on('connect', () => this.updateMqttUI(true))
+      this.mqttClient.on('connect', () => {
+        this.updateMqttUI(true)
+        this.mqttClient.subscribe(mqtt_topic)
+      })
       this.mqttClient.on('close', () => this.updateMqttUI(false))
+      this.mqttClient.on('message', (topic, message) => {
+        this.handleMqttMessage(topic, message)
+      })
     } catch (e) { console.warn('MQTT System Offline') }
+  }
+
+  handleMqttMessage(topic, message) {
+    try {
+      const data = JSON.parse(message.toString())
+      const entityId = topic.replace('ha/state/', '')
+      
+      // Update internal state
+      this.state.pages.forEach(page => {
+        page.widgets.forEach(w => {
+          if (w.ha_entity === entityId) {
+            w.value = data.state
+            // Update UI element directly for speed
+            const el = document.querySelector(`[gs-id="${w.id}"]`)
+            if (el) {
+              const valEl = el.querySelector('.value-text')
+              if (valEl) valEl.textContent = data.state
+              
+              // Handle switches
+              if (w.type === 'switch' || w.type === 'light') {
+                const statusEl = el.querySelector('.status-text')
+                if (statusEl) statusEl.textContent = data.state.toUpperCase()
+                el.classList.toggle('status-on', data.state === 'on')
+              }
+            }
+          }
+        })
+      })
+    } catch (e) {}
   }
 
   updateMqttUI(connected) {

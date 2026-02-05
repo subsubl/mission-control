@@ -38,6 +38,18 @@
   @apply !bg-surface !border !border-white/5 !rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-300;
 }
 
+.grid-stack-item-content.status-on {
+  @apply !border-accent/40 !bg-accent/10 shadow-[0_0_50px_-20px_rgba(0,242,255,0.3)];
+}
+
+.grid-stack-item-content.status-on .value-text {
+  @apply text-accent drop-shadow-[0_0_10px_rgba(0,242,255,0.5)];
+}
+
+.grid-stack-item-content.status-on .status-text {
+  @apply text-white;
+}
+
 .edit-mode .grid-stack-item-content {
   @apply !border-accent/40 !bg-accent/[0.02];
 }
@@ -90,4 +102,11 @@
 
 .input-field {
   @apply w-full bg-white/[0.03] border border-white/10 p-4 rounded-2xl outline-none focus:border-accent focus:bg-white/[0.05] transition-all text-sm;
+}
+
+.page-indicator {
+  @apply w-1.5 h-1.5 rounded-full bg-white/10 transition-all duration-500;
+}
+.page-indicator.active {
+  @apply bg-accent w-4 shadow-[0_0_10px_#00f2ff];
 }
