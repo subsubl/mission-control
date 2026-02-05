@@ -1,0 +1,8 @@
+caVersion = 0
+id = com.subsubl.missioncontrol
+publisher = Šubl
+name = Mission Control
+version = 1.0.0
+capabilities = none
+maxUsers = 1
+entry = app/index.html
